@@ -1,0 +1,14 @@
+names:
+- license_plate
+- objects
+nc: 2
+path: C:\Users\amanc\license-plate-detector\backend\License-Plate-Detection-1
+roboflow:
+  license: CC BY 4.0
+  project: license-plate-detection-n9ped
+  url: https://universe.roboflow.com/aman-chaudhary/license-plate-detection-n9ped/dataset/2
+  version: 2
+  workspace: aman-chaudhary
+test: test/images
+train: train/images
+val: valid/images
