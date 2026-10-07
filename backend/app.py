@@ -2,8 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import cv2
 import numpy as np
-import easyocr
-from ultralytics import YOLO
+import gc
 import base64
 import time
 import os
@@ -12,32 +11,44 @@ import re
 app = Flask(__name__)
 CORS(app)
 
-# Initialize models
-print("Loading EasyOCR...")
-reader = easyocr.Reader(['en'], gpu=False)
-print("Loading YOLOv8...")
-
-# Try to load custom trained model, fallback to pretrained
-model_paths = [
-    'license_plate_best.pt',
-    'license_plate_production_3221img.pt',
-    'License-Plate-Detection-1/weights/best.pt',
-    'runs/detect/train/weights/best.pt',
-    'yolov8n.pt'
-]
-
+# Models are loaded lazily to keep the free deployment memory footprint low.
+# YOLO and EasyOCR are never kept in memory at the same time.
+reader = None
 model = None
-for path in model_paths:
-    if os.path.exists(path):
-        print(f"Loading model from: {path}")
-        model = YOLO(path)
-        break
+model_path_loaded = None
 
-if model is None:
-    print("Loading default YOLOv8 model...")
+def get_model():
+    global model, model_path_loaded
+    if model is not None: return model
+    from ultralytics import YOLO
+    model_paths = ['license_plate_best.pt','license_plate_production_3221img.pt','License-Plate-Detection-1/weights/best.pt','runs/detect/train/weights/best.pt','yolov8n.pt']
+    for path in model_paths:
+        if os.path.exists(path):
+            print(f"Loading model from: {path}")
+            model = YOLO(path)
+            model_path_loaded = path
+            return model
     model = YOLO('yolov8n.pt')
+    model_path_loaded = 'yolov8n.pt'
+    return model
 
-print("Models loaded successfully!")
+def release_model():
+    global model
+    model = None
+    gc.collect()
+
+def get_reader():
+    global reader
+    if reader is None:
+        import easyocr
+        print('Loading EasyOCR...')
+        reader = easyocr.Reader(['en'], gpu=False)
+    return reader
+
+def release_reader():
+    global reader
+    reader = None
+    gc.collect()
 
 class ImageEnhancer:
     """Image enhancement for foggy/hazy images"""
@@ -151,7 +162,8 @@ class ImageEnhancer:
 
 def detect_license_plate(image):
     """Detect license plates using YOLOv8"""
-    results = model(image, conf=0.2)
+    detector = get_model()
+    results = detector(image, conf=0.2)
     
     plates = []
     for result in results:
@@ -253,7 +265,8 @@ def extract_text(plate_img):
         
         for version_name, img in versions:
             try:
-                results = reader.readtext(
+                ocr_reader = get_reader()
+                results = ocr_reader.readtext(
                     img,
                     allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ',
                     paragraph=False,
@@ -391,6 +404,9 @@ def detect():
         
         print(f"  ✓ Detected {len(plates)} plate(s)")
         
+        # Release YOLO before loading EasyOCR so both heavy models are not resident together.
+        release_model()
+
         # Step 3: Extract text from all detected plates
         print("Step 3: Extracting text with improved OCR...")
         all_ocr_results = []
@@ -407,6 +423,8 @@ def detect():
                 for result in ocr_results:
                     result['plate_index'] = idx
                 all_ocr_results.extend(ocr_results)
+
+        release_reader()
         
         # Get best plate for display
         plate_data = plates[0]
@@ -466,7 +484,7 @@ def detect():
             'plates_detected': int(len(plates)),
             'detection_confidence': float(plate_data['confidence']),
             'processing_time': float(processing_time),
-            'model_used': 'Custom Trained (3221 images)' if 'best.pt' in str(model.ckpt_path) else 'Pretrained'
+            'model_used': 'Custom Trained (3221 images)' if model_path_loaded and 'best.pt' in model_path_loaded else 'Pretrained'
         })
         
     except Exception as e:
@@ -478,12 +496,12 @@ def detect():
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    model_info = 'Custom Trained Model (94.8% mAP50)' if 'best.pt' in str(model.ckpt_path) else 'Pretrained YOLOv8'
+    model_info = 'Custom Trained Model (94.8% mAP50)' if model_path_loaded and 'best.pt' in model_path_loaded else 'Custom/Pretrained YOLOv8 (lazy-loaded)'
     return jsonify({
         'status': 'healthy', 
         'message': 'License Plate Detection API is running',
-        'models': f'YOLOv8 ({model_info}) + EasyOCR (Enhanced)',
-        'model_path': str(model.ckpt_path),
+        'models': f'YOLOv8 ({model_info}) + EasyOCR (Enhanced, lazy-loaded)',
+        'model_path': model_path_loaded or 'not loaded yet',
         'features': [
             'Dark Channel Prior Dehazing',
             'YOLOv8 Object Detection',
