@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { Upload, Camera, AlertCircle, CheckCircle2, Loader2, ImageIcon, Sparkles, Zap, Eye, Download, X } from 'lucide-react';
 
-// Production API URL is supplied through REACT_APP_API_URL.\nexport default function LicensePlateDetector() {
+// Production API URL is supplied through REACT_APP_API_URL.
+export default function LicensePlateDetector() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [loading, setLoading] = useState(false);
