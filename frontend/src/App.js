@@ -61,7 +61,7 @@ export default function LicensePlateDetector() {
       }
     } catch (err) {
       clearInterval(progressInterval);
-      setError('Failed to connect to server. Make sure Flask is running on port 5000.');
+      setError('Failed to connect to the detection server. Please try again in a moment.');
     } finally {
       setLoading(false);
       setTimeout(() => setUploadProgress(0), 1000);
