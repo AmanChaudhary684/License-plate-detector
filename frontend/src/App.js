@@ -1,7 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Upload, Camera, AlertCircle, CheckCircle2, Loader2, ImageIcon, Sparkles, Zap, Eye, Download, X } from 'lucide-react';
 
-// Production API URL is supplied through REACT_APP_API_URL.
 export default function LicensePlateDetector() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -62,7 +61,7 @@ export default function LicensePlateDetector() {
       }
     } catch (err) {
       clearInterval(progressInterval);
-      setError('Failed to connect to the detection server. Please try again in a moment.');
+      setError('Failed to connect to server. Make sure Flask is running on port 5000.');
     } finally {
       setLoading(false);
       setTimeout(() => setUploadProgress(0), 1000);
