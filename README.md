@@ -1,5 +1,13 @@
 # License Plate Detection System - PRODUCTION READY
 
+## 🌐 Live Demo
+
+**[🚗 Open the Functional License Plate Detector](https://license-plate-detector-frontend.onrender.com)**
+
+The frontend is hosted on Render and connected to the live Flask/YOLOv8/EasyOCR backend.
+
+**Backend API:** https://license-plate-detector-api.onrender.com
+
 ## 🎯 Project Overview
 AI-powered license plate detection system with fog removal, real-time detection, and OCR.
 
@@ -11,30 +19,20 @@ AI-powered license plate detection system with fog removal, real-time detection,
 
 ## 🏗️ Architecture
 ```
-┌─────────────┐
-│   Frontend  │ React (http://localhost:3000)
-│   (React)   │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   Backend   │ Flask (http://localhost:5000)
-│   (Flask)   │
-└──────┬──────┘
-       │
-       ├──► Image Enhancement (OpenCV)
-       │    └─ Dark Channel Prior Dehazing
-       │
-       ├──► Object Detection (YOLOv8)
-       │    └─ Custom trained on 1273 images
-       │
-       └──► OCR (EasyOCR)
-            └─ Text extraction with confidence
+┌──────────────────────┐
+│   Render Frontend    │
+│       React          │
+└──────────┬───────────┘
+           │ HTTPS
+           ▼
+┌──────────────────────┐
+│    Render Backend    │
+│ Flask + YOLOv8 + OCR │
+└──────────────────────┘
 ```
 
 ## 🚀 Quick Start
 
-##Before##
 ### Start Backend
 ```bash
 cd backend
@@ -46,19 +44,14 @@ python app.py
 cd frontend
 npm start
 ```
-## After##
-# Just double-click start.bat
-# Everything starts automatically
-# Browser opens automatically
-# One command to stop everything
 
-### Access Application
+### Local Access
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:5000/api/health
 
 ## 📁 Key Files
-- `license_plate_best.pt` - Production model (1273 images)
-- `app.py` - Flask backend server
+- `backend/license_plate_best.pt` - Production model
+- `backend/app.py` - Flask backend server
 - `frontend/src/App.js` - React frontend
 
 ## 🎓 Training History
@@ -83,4 +76,4 @@ npm start
 Aman Chaudhary, Parth Rawat, Atul Chauhan
 
 ## 📅 Completion Date
-November 2025          //can be changed as per requirements
+November 2025
