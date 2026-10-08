@@ -80,7 +80,7 @@ class ImageEnhancer:
     @staticmethod
     def transmission_estimate(img, A, sz=15, omega=0.95):
         """Estimate transmission map"""
-        norm_img = np.empty_like(img, dtype=np.float64)
+        norm_img = np.empty_like(img, dtype=np.float32)
         for i in range(3):
             norm_img[:, :, i] = img[:, :, i] / A[i]
         
@@ -110,7 +110,7 @@ class ImageEnhancer:
     @staticmethod
     def dehaze(img, t0=0.1, w=0.95):
         """Main dehazing function using Dark Channel Prior"""
-        img = img.astype(np.float64) / 255.0
+        img = img.astype(np.float32) / 255.0
         
         # Calculate dark channel
         dark = ImageEnhancer.dark_channel(img)
@@ -123,8 +123,8 @@ class ImageEnhancer:
         
         # Guided filter for refinement
         gray = cv2.cvtColor((img * 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
-        gray = gray.astype(np.float64) / 255.0
-        t = ImageEnhancer.guided_filter(gray, t, r=60, eps=0.0001)
+        gray = gray.astype(np.float32) / 255.0
+        t = ImageEnhancer.guided_filter(gray, t.astype(np.float32), r=30, eps=0.0001)
         
         # Recover scene radiance
         t = np.maximum(t, t0)
@@ -251,15 +251,13 @@ def extract_text(plate_img):
     try:
         print(f"  OCR: Processing plate of size {plate_img.shape}")
         
-        # Preprocess plate in multiple ways
+        # Preprocess once and use the two most useful OCR variants.
         plate_large, gray, denoised, binary = preprocess_plate_for_ocr(plate_img)
         
-        # Run OCR on multiple preprocessed versions
+        # Two OCR passes instead of four to reduce CPU time.
         all_results = []
         versions = [
             ('color_upscaled', plate_large),
-            ('grayscale', gray),
-            ('denoised', denoised),
             ('binary', binary)
         ]
         
@@ -379,6 +377,14 @@ def detect():
         print(f"\n{'='*60}")
         print(f"Processing image: {img.shape}")
         
+        # Limit expensive enhancement to a practical inference resolution.
+        max_dimension = 1280
+        h, w = img.shape[:2]
+        if max(h, w) > max_dimension:
+            scale = max_dimension / max(h, w)
+            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+            print(f"Resized input to: {img.shape}")
+        
         # Step 1: Enhance image
         print("Step 1: Enhancing image...")
         enhanced_img = ImageEnhancer.enhance_image(img)
@@ -404,9 +410,6 @@ def detect():
         
         print(f"  ✓ Detected {len(plates)} plate(s)")
         
-        # Release YOLO before loading EasyOCR so both heavy models are not resident together.
-        release_model()
-
         # Step 3: Extract text from all detected plates
         print("Step 3: Extracting text with improved OCR...")
         all_ocr_results = []
@@ -424,6 +427,7 @@ def detect():
                     result['plate_index'] = idx
                 all_ocr_results.extend(ocr_results)
 
+        # Keep YOLO warm between requests; release EasyOCR after the request.
         release_reader()
         
         # Get best plate for display
