@@ -26,6 +26,13 @@ def get_model():
         if os.path.exists(path):
             print(f"Loading model from: {path}")
             model = YOLO(path)
+
+            # Render's free 512 MB instance can OOM during Ultralytics'
+            # Conv+BatchNorm fusion step. Skip the temporary fusion allocation.
+            def _skip_fuse(verbose=True, imgsz=640):
+                return model.model
+            model.model.fuse = _skip_fuse
+
             model_path_loaded = path
             return model
     model = YOLO('yolov8n.pt')
@@ -90,19 +97,19 @@ class ImageEnhancer:
     @staticmethod
     def guided_filter(I, p, r, eps):
         """Apply guided filter"""
-        mean_I = cv2.boxFilter(I, cv2.CV_64F, (r, r))
-        mean_p = cv2.boxFilter(p, cv2.CV_64F, (r, r))
-        mean_Ip = cv2.boxFilter(I * p, cv2.CV_64F, (r, r))
+        mean_I = cv2.boxFilter(I, cv2.CV_32F, (r, r))
+        mean_p = cv2.boxFilter(p, cv2.CV_32F, (r, r))
+        mean_Ip = cv2.boxFilter(I * p, cv2.CV_32F, (r, r))
         cov_Ip = mean_Ip - mean_I * mean_p
         
-        mean_II = cv2.boxFilter(I * I, cv2.CV_64F, (r, r))
+        mean_II = cv2.boxFilter(I * I, cv2.CV_32F, (r, r))
         var_I = mean_II - mean_I * mean_I
         
         a = cov_Ip / (var_I + eps)
         b = mean_p - a * mean_I
         
-        mean_a = cv2.boxFilter(a, cv2.CV_64F, (r, r))
-        mean_b = cv2.boxFilter(b, cv2.CV_64F, (r, r))
+        mean_a = cv2.boxFilter(a, cv2.CV_32F, (r, r))
+        mean_b = cv2.boxFilter(b, cv2.CV_32F, (r, r))
         
         q = mean_a * I + mean_b
         return q
@@ -419,6 +426,8 @@ def detect():
             print(f"    Confidence: {plate_data['confidence']:.2%}")
             
             plate_img = plate_data['image']
+            # Free YOLO before loading EasyOCR so both heavy ML models are never resident together.
+            release_model()
             ocr_results = extract_text(plate_img)
             
             if ocr_results:
