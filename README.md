@@ -1,12 +1,5 @@
 # License Plate Detection System - PRODUCTION READY
 
-## 🌐 Live Demo
-
-**[🚗 Open the Functional License Plate Detector](https://license-plate-detector-frontend.onrender.com)**
-
-The frontend is hosted on Render and connected to the live Flask/YOLOv8/EasyOCR backend.
-
-**Backend API:** https://license-plate-detector-api.onrender.com
 
 ## 🎯 Project Overview
 AI-powered license plate detection system with fog removal, real-time detection, and OCR.
