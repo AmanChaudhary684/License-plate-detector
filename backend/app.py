@@ -2,7 +2,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import cv2
 import numpy as np
-import gc
+import easyocr
+from ultralytics import YOLO
 import base64
 import time
 import os
@@ -11,51 +12,32 @@ import re
 app = Flask(__name__)
 CORS(app)
 
-# Models are loaded lazily to keep the free deployment memory footprint low.
-# YOLO and EasyOCR are never kept in memory at the same time.
-reader = None
+# Initialize models
+print("Loading EasyOCR...")
+reader = easyocr.Reader(['en'], gpu=False)
+print("Loading YOLOv8...")
+
+# Try to load custom trained model, fallback to pretrained
+model_paths = [
+    'license_plate_best.pt',
+    'license_plate_production_3221img.pt',
+    'License-Plate-Detection-1/weights/best.pt',
+    'runs/detect/train/weights/best.pt',
+    'yolov8n.pt'
+]
+
 model = None
-model_path_loaded = None
+for path in model_paths:
+    if os.path.exists(path):
+        print(f"Loading model from: {path}")
+        model = YOLO(path)
+        break
 
-def get_model():
-    global model, model_path_loaded
-    if model is not None: return model
-    from ultralytics import YOLO
-    model_paths = ['license_plate_best.pt','license_plate_production_3221img.pt','License-Plate-Detection-1/weights/best.pt','runs/detect/train/weights/best.pt','yolov8n.pt']
-    for path in model_paths:
-        if os.path.exists(path):
-            print(f"Loading model from: {path}")
-            model = YOLO(path)
-
-            # Render's free 512 MB instance can OOM during Ultralytics'
-            # Conv+BatchNorm fusion step. Skip the temporary fusion allocation.
-            def _skip_fuse(verbose=True, imgsz=640):
-                return model.model
-            model.model.fuse = _skip_fuse
-
-            model_path_loaded = path
-            return model
+if model is None:
+    print("Loading default YOLOv8 model...")
     model = YOLO('yolov8n.pt')
-    model_path_loaded = 'yolov8n.pt'
-    return model
 
-def release_model():
-    global model
-    model = None
-    gc.collect()
-
-def get_reader():
-    global reader
-    if reader is None:
-        import easyocr
-        print('Loading EasyOCR...')
-        reader = easyocr.Reader(['en'], gpu=False)
-    return reader
-
-def release_reader():
-    global reader
-    reader = None
-    gc.collect()
+print("Models loaded successfully!")
 
 class ImageEnhancer:
     """Image enhancement for foggy/hazy images"""
@@ -87,7 +69,7 @@ class ImageEnhancer:
     @staticmethod
     def transmission_estimate(img, A, sz=15, omega=0.95):
         """Estimate transmission map"""
-        norm_img = np.empty_like(img, dtype=np.float32)
+        norm_img = np.empty_like(img, dtype=np.float64)
         for i in range(3):
             norm_img[:, :, i] = img[:, :, i] / A[i]
         
@@ -97,19 +79,19 @@ class ImageEnhancer:
     @staticmethod
     def guided_filter(I, p, r, eps):
         """Apply guided filter"""
-        mean_I = cv2.boxFilter(I, cv2.CV_32F, (r, r))
-        mean_p = cv2.boxFilter(p, cv2.CV_32F, (r, r))
-        mean_Ip = cv2.boxFilter(I * p, cv2.CV_32F, (r, r))
+        mean_I = cv2.boxFilter(I, cv2.CV_64F, (r, r))
+        mean_p = cv2.boxFilter(p, cv2.CV_64F, (r, r))
+        mean_Ip = cv2.boxFilter(I * p, cv2.CV_64F, (r, r))
         cov_Ip = mean_Ip - mean_I * mean_p
         
-        mean_II = cv2.boxFilter(I * I, cv2.CV_32F, (r, r))
+        mean_II = cv2.boxFilter(I * I, cv2.CV_64F, (r, r))
         var_I = mean_II - mean_I * mean_I
         
         a = cov_Ip / (var_I + eps)
         b = mean_p - a * mean_I
         
-        mean_a = cv2.boxFilter(a, cv2.CV_32F, (r, r))
-        mean_b = cv2.boxFilter(b, cv2.CV_32F, (r, r))
+        mean_a = cv2.boxFilter(a, cv2.CV_64F, (r, r))
+        mean_b = cv2.boxFilter(b, cv2.CV_64F, (r, r))
         
         q = mean_a * I + mean_b
         return q
@@ -117,7 +99,7 @@ class ImageEnhancer:
     @staticmethod
     def dehaze(img, t0=0.1, w=0.95):
         """Main dehazing function using Dark Channel Prior"""
-        img = img.astype(np.float32) / 255.0
+        img = img.astype(np.float64) / 255.0
         
         # Calculate dark channel
         dark = ImageEnhancer.dark_channel(img)
@@ -130,8 +112,8 @@ class ImageEnhancer:
         
         # Guided filter for refinement
         gray = cv2.cvtColor((img * 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
-        gray = gray.astype(np.float32) / 255.0
-        t = ImageEnhancer.guided_filter(gray, t.astype(np.float32), r=30, eps=0.0001)
+        gray = gray.astype(np.float64) / 255.0
+        t = ImageEnhancer.guided_filter(gray, t, r=60, eps=0.0001)
         
         # Recover scene radiance
         t = np.maximum(t, t0)
@@ -169,8 +151,7 @@ class ImageEnhancer:
 
 def detect_license_plate(image):
     """Detect license plates using YOLOv8"""
-    detector = get_model()
-    results = detector(image, conf=0.2)
+    results = model(image, conf=0.2)
     
     plates = []
     for result in results:
@@ -258,20 +239,21 @@ def extract_text(plate_img):
     try:
         print(f"  OCR: Processing plate of size {plate_img.shape}")
         
-        # Preprocess once and use the two most useful OCR variants.
+        # Preprocess plate in multiple ways
         plate_large, gray, denoised, binary = preprocess_plate_for_ocr(plate_img)
         
-        # Two OCR passes instead of four to reduce CPU time.
+        # Run OCR on multiple preprocessed versions
         all_results = []
         versions = [
             ('color_upscaled', plate_large),
+            ('grayscale', gray),
+            ('denoised', denoised),
             ('binary', binary)
         ]
         
         for version_name, img in versions:
             try:
-                ocr_reader = get_reader()
-                results = ocr_reader.readtext(
+                results = reader.readtext(
                     img,
                     allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ',
                     paragraph=False,
@@ -384,14 +366,6 @@ def detect():
         print(f"\n{'='*60}")
         print(f"Processing image: {img.shape}")
         
-        # Limit expensive enhancement to a practical inference resolution.
-        max_dimension = 1280
-        h, w = img.shape[:2]
-        if max(h, w) > max_dimension:
-            scale = max_dimension / max(h, w)
-            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-            print(f"Resized input to: {img.shape}")
-        
         # Step 1: Enhance image
         print("Step 1: Enhancing image...")
         enhanced_img = ImageEnhancer.enhance_image(img)
@@ -426,8 +400,6 @@ def detect():
             print(f"    Confidence: {plate_data['confidence']:.2%}")
             
             plate_img = plate_data['image']
-            # Free YOLO before loading EasyOCR so both heavy ML models are never resident together.
-            release_model()
             ocr_results = extract_text(plate_img)
             
             if ocr_results:
@@ -435,9 +407,6 @@ def detect():
                 for result in ocr_results:
                     result['plate_index'] = idx
                 all_ocr_results.extend(ocr_results)
-
-        # Keep YOLO warm between requests; release EasyOCR after the request.
-        release_reader()
         
         # Get best plate for display
         plate_data = plates[0]
@@ -497,7 +466,7 @@ def detect():
             'plates_detected': int(len(plates)),
             'detection_confidence': float(plate_data['confidence']),
             'processing_time': float(processing_time),
-            'model_used': 'Custom Trained (3221 images)' if model_path_loaded and 'best.pt' in model_path_loaded else 'Pretrained'
+            'model_used': 'Custom Trained (3221 images)' if 'best.pt' in str(model.ckpt_path) else 'Pretrained'
         })
         
     except Exception as e:
@@ -509,12 +478,12 @@ def detect():
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    model_info = 'Custom Trained Model (94.8% mAP50)' if model_path_loaded and 'best.pt' in model_path_loaded else 'Custom/Pretrained YOLOv8 (lazy-loaded)'
+    model_info = 'Custom Trained Model (94.8% mAP50)' if 'best.pt' in str(model.ckpt_path) else 'Pretrained YOLOv8'
     return jsonify({
         'status': 'healthy', 
         'message': 'License Plate Detection API is running',
-        'models': f'YOLOv8 ({model_info}) + EasyOCR (Enhanced, lazy-loaded)',
-        'model_path': model_path_loaded or 'not loaded yet',
+        'models': f'YOLOv8 ({model_info}) + EasyOCR (Enhanced)',
+        'model_path': str(model.ckpt_path),
         'features': [
             'Dark Channel Prior Dehazing',
             'YOLOv8 Object Detection',
